@@ -2,37 +2,622 @@
 <html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
-    <title>我的專案甘特圖 - GitHub Pages</title>
-    <script type="module">
-      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-      mermaid.initialize({ startOnLoad: true });
-    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>互動式專案甘特圖 (Go 後端)</title>
+    <!-- 載入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f7f7f7; }
+        .card { box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1); }
+        .gantt-chart-container {
+            display: grid;
+            grid-template-columns: 280px 1fr; /* 任務列表寬度 */
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            overflow: hidden;
+            background-color: white;
+            min-height: 400px;
+        }
+        .task-list {
+            padding: 0.5rem;
+            border-right: 1px solid #e5e7eb;
+            overflow-y: hidden; 
+            padding-top: 40px; 
+            position: relative;
+        }
+        .gantt-area {
+            overflow: auto; /* 允許水平和垂直捲動 */
+        }
+        .time-axis {
+            display: flex;
+            position: sticky;
+            top: 0;
+            background-color: #f3f4f6;
+            border-bottom: 1px solid #e5e7eb;
+            z-index: 10;
+        }
+        .task-row {
+            height: 40px;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px dotted #e5e7eb;
+        }
+        .task-bar {
+            position: absolute;
+            height: 30px;
+            border-radius: 0.25rem;
+            cursor: grab;
+            transition: background-color 0.1s;
+            z-index: 5;
+            padding-left: 5px; 
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .task-bar:hover {
+            opacity: 0.9;
+        }
+        .task-bar:active {
+            cursor: grabbing;
+        }
+        .day-cell {
+            min-width: 30px; 
+            text-align: center;
+            padding: 4px 0;
+            font-size: 0.75rem;
+            border-right: 1px solid #f3f4f6;
+        }
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1.25rem;
+            color: #4f46e5;
+            z-index: 100;
+            border-radius: 0.5rem;
+        }
+        /* Modal Styles */
+        .modal {
+            transition: opacity 0.3s ease-in-out;
+            pointer-events: none;
+            opacity: 0;
+        }
+        .modal.open {
+            pointer-events: auto;
+            opacity: 1;
+        }
+    </style>
 </head>
-<body>
+<body class="p-4 sm:p-8">
+    <div class="max-w-7xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-gray-800 mb-2">互動式專案甘特圖 (Go 後端同步)</h1>
+            <p class="text-gray-600">數據儲存於後端 <code class="bg-gray-200 p-1 rounded">gantt.json</code> 檔案中。</p>
+        </header>
 
-    <h1>專案進度甘特圖</h1>
+        <!-- 新增任務表單 -->
+        <div id="addTaskForm" class="bg-white p-6 rounded-xl mb-6 card grid grid-cols-1 sm:grid-cols-2 md:grid-cols-7 gap-4 border border-gray-200">
+            <input type="text" id="taskName" placeholder="任務名稱" class="col-span-1 md:col-span-2 p-2 border rounded-md focus:ring-indigo-500 focus:border-indigo-500">
+            
+            <input type="date" id="taskStart" class="p-2 border rounded-md">
 
-    <pre class="mermaid">
-        gantt
-            title 專案開發時程表 (Mermaid 範例)
-            dateFormat  YYYY-MM-DD
+            <input type="number" id="taskDuration" placeholder="持續天數" value="5" min="1" class="p-2 border rounded-md">
+            
+            <select id="taskPriority" class="p-2 border rounded-md">
+                <option value="1">優先度 1 (緊急)</option>
+                <option value="2">優先度 2 (高)</option>
+                <option value="3" selected>優先度 3 (中)</option>
+                <option value="4">優先度 4 (低)</option>
+            </select>
 
-            section 規劃階段
-            需求分析     :a1, 2025-11-01, 7d
-            設計原型     :after a1, 5d
+            <input type="color" id="taskColor" value="#4F46E5" title="選擇顏色" class="p-2 border rounded-md h-10">
 
-            section 開發階段
-            前端開發     :b1, after 設計原型, 10d
-            後端開發     :c1, after 設計原型, 15d
-            資料庫設計   :d1, 2025-11-05, 5d
-            整合測試     :2025-11-20, 5d
+            <button onclick="addTask()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150">
+                新增任務
+            </button>
+        </div>
+        <!-- /新增任務表單 -->
 
-            section 部署與發布
-            最終審核     :2025-11-25, 3d
-            正式上線     :2025-11-28, 2d
-    </pre>
+        <main class="card bg-white rounded-xl p-0 overflow-hidden relative">
+            <div id="loadingOverlay" class="loading-overlay">
+                <p>正在從 Go 後端載入數據...</p>
+            </div>
+            <div id="ganttChart" class="gantt-chart-container">
+                <!-- 圖表內容將由 JavaScript 渲染 -->
+            </div>
+        </main>
+        
+        <footer class="mt-8 text-center text-gray-500 text-sm">
+            <p>本應用程式由 Go 後端提供數據服務，確保數據持久化於 <code class="bg-gray-200 p-1 rounded">gantt.json</code> 檔案。</p>
+            <p id="statusMessage" class="mt-2 text-sm font-semibold text-blue-600">載入中...</p>
+        </footer>
+    </div>
 
-    <p>這是一個使用 Mermaid.js 在 GitHub Pages 上呈現的甘特圖。</p>
+    <!-- 任務編輯模態框 (Modal) -->
+    <div id="editModal" class="modal fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-50">
+        <div class="bg-white p-6 rounded-lg w-full max-w-md shadow-2xl transform scale-100">
+            <h2 class="text-2xl font-bold mb-4">編輯任務：<span id="edit-task-title"></span></h2>
+            <form id="editForm" onsubmit="event.preventDefault(); updateTask()">
+                <input type="hidden" id="edit-id">
+                
+                <div class="mb-4">
+                    <label for="edit-name" class="block text-sm font-medium text-gray-700">任務名稱</label>
+                    <input type="text" id="edit-name" required class="mt-1 p-2 block w-full border border-gray-300 rounded-md">
+                </div>
+                
+                <div class="mb-4 grid grid-cols-2 gap-4">
+                    <div>
+                        <label for="edit-priority" class="block text-sm font-medium text-gray-700">優先度</label>
+                        <select id="edit-priority" required class="mt-1 p-2 block w-full border border-gray-300 rounded-md">
+                            <option value="1">1 (緊急)</option>
+                            <option value="2">2 (高)</option>
+                            <option value="3">3 (中)</option>
+                            <option value="4">4 (低)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="edit-duration" class="block text-sm font-medium text-gray-700">持續天數</label>
+                        <input type="number" id="edit-duration" min="1" required class="mt-1 p-2 block w-full border border-gray-300 rounded-md">
+                    </div>
+                </div>
 
+                <div class="mb-4 grid grid-cols-2 gap-4">
+                    <div>
+                        <label for="edit-start" class="block text-sm font-medium text-gray-700">起始日期</label>
+                        <input type="date" id="edit-start" required class="mt-1 p-2 block w-full border border-gray-300 rounded-md">
+                    </div>
+                    <div>
+                        <label for="edit-color" class="block text-sm font-medium text-gray-700">顏色</label>
+                        <input type="color" id="edit-color" class="mt-1 p-1 block w-full border border-gray-300 rounded-md h-10">
+                    </div>
+                </div>
+                
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="closeEditModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300">
+                        取消
+                    </button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 text-white font-bold rounded-lg hover:bg-indigo-700 transition duration-150">
+                        儲存變更
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <!-- /任務編輯模態框 -->
+
+    <script>
+        // --- 1. 數據模型與 API 設置 ---
+        const DAY_WIDTH = 30; // 每個日期的像素寬度
+        const API_ENDPOINT = '/api/tasks';
+        let tasks = []; 
+        let nextTaskId = 1;
+        
+        const statusMessage = document.getElementById('statusMessage');
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const editModal = document.getElementById('editModal');
+
+        // Initialize form start date to today
+        function formatDate(date) {
+            return date.getFullYear() + '-' + 
+                   String(date.getMonth() + 1).padStart(2, '0') + '-' + 
+                   String(date.getDate()).padStart(2, '0');
+        }
+        document.getElementById('taskStart').value = formatDate(new Date());
+
+
+        // --- 2. API 互動函數 ---
+
+        // Fetch all tasks
+        async function fetchTasks() {
+            loadingOverlay.style.display = 'flex';
+            statusMessage.textContent = 'Requesting data from Go backend...';
+            try {
+                const response = await fetch(API_ENDPOINT);
+                if (!response.ok) {
+                    throw new Error("HTTP Error! Status Code: " + response.status);
+                }
+                const fetchedTasks = await response.json();
+                tasks = fetchedTasks;
+
+                // Update nextTaskId
+                nextTaskId = tasks.length > 0 ? Math.max(...tasks.map(t => t.id)) + 1 : 1;
+                
+                statusMessage.textContent = "Data synced successfully. Total " + tasks.length + " tasks.";
+                renderGantt();
+            } catch (error) {
+                console.error("Failed to load tasks:", error);
+                statusMessage.textContent = "Failed to load tasks: " + error.message + ". Please check if the Go backend server is running.";
+            } finally {
+                loadingOverlay.style.display = 'none';
+            }
+        }
+
+        // Save the entire task list to backend (gantt.json)
+        async function saveTasksToBackend() {
+            try {
+                const response = await fetch(API_ENDPOINT, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(tasks)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Backend save failed');
+                }
+                statusMessage.textContent = 'Tasks successfully saved to gantt.json.';
+                renderGantt();
+            } catch (error) {
+                console.error("Failed to save tasks:", error);
+                statusMessage.textContent = "Save failed: " + error.message;
+            }
+        }
+        
+        // Delete a single task by ID
+        window.deleteTask = async function(taskId) {
+            // Replaced alert/confirm with custom logic (though here using browser confirm as a quick measure)
+            if (!window.confirm("Are you sure you want to delete Task ID " + taskId + "? This action cannot be undone.")) {
+                return;
+            }
+
+            statusMessage.textContent = 'Deleting task ID ' + taskId + '...';
+            try {
+                const response = await fetch(API_ENDPOINT + "?id=" + taskId, {
+                    method: 'DELETE',
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Backend delete failed');
+                }
+
+                // Remove task from local array and re-render
+                tasks = tasks.filter(t => t.id !== taskId);
+                statusMessage.textContent = 'Task ID ' + taskId + ' deleted successfully from gantt.json.';
+                renderGantt();
+            } catch (error) {
+                console.error("Failed to delete task:", error);
+                statusMessage.textContent = "Delete failed: " + error.message;
+            }
+        }
+
+
+        // --- 3. 日期工具函數 (與 Go 版本保持一致) ---
+
+        // Calculate the difference in days between two dates (inclusive)
+        function dateDiffInDays(a, b) {
+            const _MS_PER_DAY = 1000 * 60 * 60 * 24;
+            // Ensure only date parts are compared
+            const utc1 = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+            const utc2 = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+            return Math.floor((utc2 - utc1) / _MS_PER_DAY);
+        }
+
+        // Convert priority number to label
+        function getPriorityLabel(p) {
+            if (p === 1) return "Urgent (1)";
+            if (p === 2) return "High (2)";
+            if (p === 3) return "Medium (3)";
+            return "Low (4)";
+        }
+
+        // Calculate the start and end dates for the time axis
+        function calculateDateRange() {
+            if (tasks.length === 0) {
+                 const today = new Date();
+                 const future = new Date(today);
+                 future.setDate(today.getDate() + 30);
+                 return { minDate: today, maxDate: future };
+            }
+
+            let minDate = new Date(tasks[0].start);
+            let maxDate = new Date(tasks[0].start);
+
+            tasks.forEach(task => {
+                const start = new Date(task.start);
+                const end = new Date(start);
+                // Note: DurationDays - 1 is used because durationDays includes the start date
+                end.setDate(end.getDate() + task.durationDays - 1); 
+                
+                if (start < minDate) minDate = start;
+                if (end > maxDate) maxDate = end;
+            });
+
+            // Extend 7 days before and after for padding
+            minDate.setDate(minDate.getDate() - 7);
+            maxDate.setDate(maxDate.getDate() + 7);
+
+            return { minDate, maxDate };
+        }
+
+
+        // --- 4. 渲染函數 ---
+
+        function renderGantt() {
+            const chartElement = document.getElementById('ganttChart');
+            chartElement.innerHTML = '';
+            
+            if (tasks.length === 0) {
+                chartElement.textContent = 'No tasks currently. Please add a new task to start planning!';
+                chartElement.classList.add('flex', 'justify-center', 'items-center');
+                return;
+            } else {
+                chartElement.classList.remove('flex', 'justify-center', 'items-center');
+            }
+
+            // Sort tasks by priority (lower number is higher priority)
+            const sortedTasks = [...tasks].sort((a, b) => a.priority - b.priority);
+
+            const { minDate, maxDate } = calculateDateRange();
+            const totalDays = dateDiffInDays(minDate, maxDate) + 1;
+            const chartWidth = totalDays * DAY_WIDTH;
+
+            // Render task list (left side)
+            const taskList = document.createElement('div');
+            taskList.className = 'task-list';
+            taskList.style.height = sortedTasks.length * 40 + 40 + "px"; 
+            
+            // Top header
+            const taskListHeader = document.createElement('div');
+            taskListHeader.className = 'task-row font-bold text-gray-700 bg-gray-50 border-b border-gray-200 items-center px-2 text-sm absolute top-0 left-0 w-full z-20';
+            taskListHeader.innerHTML = '<div class="w-1/4">ID</div><div class="w-2/4">Task Name (Priority)</div><div class="w-1/4 text-center">Actions</div>';
+            taskList.appendChild(taskListHeader);
+
+            // Render task names
+            sortedTasks.forEach(task => {
+                const taskNameElement = document.createElement('div');
+                taskNameElement.className = 'task-row text-sm items-center px-2';
+                taskNameElement.innerHTML = `
+                    <div class="w-1/4 text-gray-400">#${task.id}</div>
+                    <div class="w-2/4 truncate">${task.name} (${getPriorityLabel(task.priority)})</div>
+                    <div class="w-1/4 flex justify-center space-x-1">
+                        <button onclick="editTask(${task.id})" class="text-indigo-500 hover:text-indigo-700 p-1 rounded-full leading-none transition duration-150" title="Edit Task">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-7 1l4-4m-4 4l-4 4m8-4l4-4m-4 4l4 4"/>
+                            </svg>
+                        </button>
+                        <button onclick="deleteTask(${task.id})" class="text-red-500 hover:text-red-700 p-1 rounded-full leading-none transition duration-150" title="Delete Task">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                        </button>
+                    </div>
+                `;
+                taskList.appendChild(taskNameElement);
+            });
+            chartElement.appendChild(taskList);
+
+
+            // Render timeline area (right side)
+            const ganttArea = document.createElement('div');
+            ganttArea.className = 'gantt-area';
+
+
+            // Render time axis
+            const timeAxis = document.createElement('div');
+            timeAxis.className = 'time-axis';
+            timeAxis.style.width = chartWidth + "px";
+            
+            const currentDay = new Date(minDate);
+            while (currentDay <= maxDate) {
+                const dayCell = document.createElement('div');
+                dayCell.className = 'day-cell';
+                dayCell.textContent = currentDay.getDate(); // Display day of month
+                
+                // Mark month/year
+                if (currentDay.getDate() === 1 || dateDiffInDays(minDate, currentDay) === 0) {
+                    dayCell.textContent = (currentDay.getMonth() + 1) + "/" + currentDay.getDate();
+                    dayCell.classList.add('font-bold', 'text-xs', 'bg-gray-200');
+                }
+                timeAxis.appendChild(dayCell);
+                currentDay.setDate(currentDay.getDate() + 1);
+            }
+            ganttArea.appendChild(timeAxis);
+
+
+            // Render task bars
+            const taskBarsContainer = document.createElement('div');
+            taskBarsContainer.style.width = chartWidth + "px";
+            taskBarsContainer.style.position = 'relative'; 
+
+            sortedTasks.forEach((task, index) => { 
+                const startDayIndex = dateDiffInDays(minDate, new Date(task.start));
+                const leftPosition = startDayIndex * DAY_WIDTH;
+                const width = task.durationDays * DAY_WIDTH;
+
+                const bar = document.createElement('div');
+                bar.id = "task-" + task.id;
+                bar.className = 'task-bar text-xs flex items-center justify-start text-white font-semibold shadow-md';
+                bar.style.backgroundColor = task.color;
+                bar.style.width = width + "px";
+                bar.style.left = leftPosition + "px";
+                bar.style.top = (index * 40 + 5) + "px"; 
+                
+                bar.setAttribute('data-task-id', task.id); 
+                bar.setAttribute('data-start-day', startDayIndex); 
+                
+                bar.textContent = task.name + " (" + task.durationDays + " days)";
+
+                addDragListeners(bar, task);
+                
+                taskBarsContainer.appendChild(bar);
+            });
+            ganttArea.appendChild(taskBarsContainer);
+            
+            chartElement.appendChild(ganttArea);
+
+            // Sync scroll: keep left task list aligned with the right gantt area vertical scroll
+            ganttArea.addEventListener('scroll', () => {
+                const taskListScroll = document.querySelector('.task-list');
+                taskListScroll.scrollTop = ganttArea.scrollTop;
+            });
+        }
+
+
+        // --- 5. 互動邏輯 (拖曳與編輯) ---
+
+        let isDragging = false;
+        let dragTask = null;
+        let dragStartX = 0;
+        let initialLeft = 0;
+
+        function addDragListeners(bar, task) {
+            bar.addEventListener('mousedown', (e) => {
+                e.preventDefault(); 
+                isDragging = true;
+                // Find the original object reference in the tasks array
+                dragTask = tasks.find(t => t.id === task.id); 
+                dragStartX = e.clientX;
+                initialLeft = bar.offsetLeft;
+                bar.classList.add('shadow-xl', 'scale-105', 'z-20');
+                bar.style.opacity = '0.8';
+                statusMessage.textContent = "Start dragging: " + task.name;
+            });
+        }
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging || !dragTask) return;
+
+            const barElement = document.getElementById("task-" + dragTask.id);
+            if (!barElement) return;
+
+            const deltaX = e.clientX - dragStartX;
+            let newLeft = initialLeft + deltaX;
+
+            // Snap the new position to the nearest day grid line
+            const snappedDayOffset = Math.round(newLeft / DAY_WIDTH);
+            const snappedLeft = snappedDayOffset * DAY_WIDTH;
+
+            barElement.style.left = snappedLeft + "px";
+            
+            const { minDate } = calculateDateRange();
+            const potentialNewStartDate = new Date(minDate);
+            potentialNewStartDate.setDate(minDate.getDate() + snappedDayOffset);
+
+            statusMessage.textContent = "Dragging " + dragTask.name + "... New Date: " + formatDate(potentialNewStartDate);
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (!isDragging || !dragTask) return;
+
+            const barElement = document.getElementById("task-" + dragTask.id);
+            if (!barElement) return;
+
+            isDragging = false;
+            
+            const finalLeft = barElement.offsetLeft;
+            const finalDayOffset = Math.round(finalLeft / DAY_WIDTH);
+
+            // Update data model
+            const { minDate } = calculateDateRange();
+            const newStartDate = new Date(minDate);
+            newStartDate.setDate(minDate.getDate() + finalDayOffset);
+
+            dragTask.start = formatDate(newStartDate);
+            statusMessage.textContent = "Task " + dragTask.name + " updated. New Start Date: " + dragTask.start + ", saving...";
+            
+            saveTasksToBackend(); 
+
+            // Clean up state and styles
+            barElement.classList.remove('shadow-xl', 'scale-105', 'z-20');
+            barElement.style.opacity = '1';
+            dragTask = null;
+        });
+        
+        // 編輯任務
+        window.editTask = function(taskId) {
+            const task = tasks.find(t => t.id === taskId);
+            if (!task) return;
+
+            // 填充模態框數據
+            document.getElementById('edit-id').value = task.id;
+            document.getElementById('edit-task-title').textContent = task.name;
+            document.getElementById('edit-name').value = task.name;
+            document.getElementById('edit-priority').value = task.priority; // 優先度
+            document.getElementById('edit-duration').value = task.durationDays;
+            document.getElementById('edit-start').value = task.start;
+            document.getElementById('edit-color').value = task.color;
+
+            editModal.classList.add('open');
+        }
+
+        // 關閉編輯模態框
+        window.closeEditModal = function() {
+            editModal.classList.remove('open');
+        }
+
+        // 儲存編輯後的任務數據
+        window.updateTask = function() {
+            const taskId = parseInt(document.getElementById('edit-id').value);
+            
+            // 找到任務在陣列中的索引
+            const taskIndex = tasks.findIndex(t => t.id === taskId);
+            if (taskIndex === -1) {
+                closeEditModal();
+                statusMessage.textContent = 'Error: Task not found.';
+                return;
+            }
+
+            // 更新任務物件
+            tasks[taskIndex].name = document.getElementById('edit-name').value;
+            tasks[taskIndex].priority = parseInt(document.getElementById('edit-priority').value);
+            tasks[taskIndex].durationDays = parseInt(document.getElementById('edit-duration').value);
+            tasks[taskIndex].start = document.getElementById('edit-start').value;
+            tasks[taskIndex].color = document.getElementById('edit-color').value;
+
+            closeEditModal();
+            statusMessage.textContent = 'Task ID ' + taskId + ' updated locally, saving to backend...';
+            saveTasksToBackend(); // POST 整個列表回後端
+        }
+
+
+        // --- 6. 新增任務邏輯 ---
+
+        window.addTask = function() {
+            const name = document.getElementById('taskName').value;
+            const start = document.getElementById('taskStart').value;
+            const duration = parseInt(document.getElementById('taskDuration').value);
+            const priority = parseInt(document.getElementById('taskPriority').value);
+            const color = document.getElementById('taskColor').value;
+
+            if (!name || !start || isNaN(duration) || isNaN(priority) || duration <= 0 || priority <= 0 || priority > 4) {
+                statusMessage.textContent = 'Error: Please enter valid task name, start date, duration (>0), and priority (1-4).';
+                statusMessage.classList.replace('text-blue-600', 'text-red-600');
+                return;
+            }
+            statusMessage.classList.replace('text-red-600', 'text-blue-600');
+
+
+            const newTask = {
+                id: nextTaskId++,
+                name: name,
+                start: start,
+                durationDays: duration,
+                color: color,
+                priority: priority,
+            };
+
+            tasks.push(newTask);
+            statusMessage.textContent = "Successfully added task: " + name + " (Priority " + priority + "), saving...";
+
+            saveTasksToBackend();
+
+            // Clear the form
+            document.getElementById('taskName').value = '';
+            document.getElementById('taskDuration').value = 5;
+            document.getElementById('taskStart').value = formatDate(new Date()); 
+        }
+
+
+        // --- 7. 啟動應用程式 ---
+        
+        window.onload = fetchTasks;
+    </script>
 </body>
 </html>
