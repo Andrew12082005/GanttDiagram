@@ -6,14 +6,16 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv" // 導入 strconv 用於處理 ID 轉換
+	"strconv"
 	"sync"
 	"time"
 )
 
-// --- 1. 後端數據結構 (與前端任務結構匹配) ---
+// --- 1. 後端數據結構 (與前端任務結構匹配 - 全部小寫) ---
 
 // Task 結構體定義了甘特圖中單一任務的數據。
+// 注意: 結構體成員名稱必須是大寫開頭才能被 JSON 序列化/反序列化。
+// JSON tag 使用小寫以匹配前端 JS 物件屬性名稱。
 type Task struct {
 	ID           int    `json:"id"`
 	Name         string `json:"name"`
@@ -40,7 +42,7 @@ func loadTasksFromFile() ([]Task, error) {
 		fmt.Printf("Info: %s 不存在，正在創建預設檔案。\n", jsonFilePath)
 		tasks := getInitialTasks()
 
-		// 呼叫 saveTasksToFile 來創建文件。由於 saveTasksToFile 有自己的鎖定機制，這裡避免了嵌套鎖定。
+		// 在調用 saveTasksToFile 之前，必須確保沒有持有鎖定。
 		if err := saveTasksToFile(tasks); err != nil {
 			return nil, fmt.Errorf("無法創建並寫入預設檔案: %w", err)
 		}
@@ -89,12 +91,13 @@ func getInitialTasks() []Task {
 		return t.Format("2006-01-02")
 	}
 
+	// P1: #EF4444 (Red), P2: #F97316 (Orange), P3: #FBBF24 (Amber), P4: #3B82F6 (Blue), P5: #10B981 (Green)
 	return []Task{
-		{ID: 1, Name: "需求收集", Start: formatDate(start), DurationDays: 7, Color: "#34D399", Priority: 3},                    // Green - 中
-		{ID: 2, Name: "系統設計", Start: formatDate(start.AddDate(0, 0, 7)), DurationDays: 5, Color: "#60A5FA", Priority: 2},   // Blue - 高
-		{ID: 3, Name: "後端開發", Start: formatDate(start.AddDate(0, 0, 12)), DurationDays: 12, Color: "#FBBF24", Priority: 2}, // Amber - 高
-		{ID: 4, Name: "前端開發", Start: formatDate(start.AddDate(0, 0, 12)), DurationDays: 10, Color: "#F87171", Priority: 1}, // Red - 緊急
-		{ID: 5, Name: "整合測試", Start: formatDate(start.AddDate(0, 0, 24)), DurationDays: 8, Color: "#A78BFA", Priority: 3},  // Purple - 中
+		{ID: 1, Name: "需求收集", Start: formatDate(start), DurationDays: 7, Color: "#3B82F6", Priority: 4},                    // P4 - 低 (藍色)
+		{ID: 2, Name: "系統設計", Start: formatDate(start.AddDate(0, 0, 7)), DurationDays: 5, Color: "#F97316", Priority: 2},   // P2 - 高 (橘色)
+		{ID: 3, Name: "後端開發", Start: formatDate(start.AddDate(0, 0, 12)), DurationDays: 12, Color: "#EF4444", Priority: 1}, // P1 - 緊急 (紅色)
+		{ID: 4, Name: "前端開發", Start: formatDate(start.AddDate(0, 0, 12)), DurationDays: 10, Color: "#FBBF24", Priority: 3}, // P3 - 中 (黃色)
+		{ID: 5, Name: "整合測試", Start: formatDate(start.AddDate(0, 0, 24)), DurationDays: 8, Color: "#10B981", Priority: 5},  // P5 - 最低 (綠色)
 	}
 }
 
@@ -214,7 +217,10 @@ func main() {
 	fmt.Printf("Go 甘特圖後端已啟動，請在瀏覽器中開啟 http://localhost:%s\n", port)
 
 	// 首次嘗試載入數據，確保 gantt.json 存在或被創建
-	loadTasksFromFile()
+	// 注意：這裡移除了原有的 defer unlock 邏輯以避免死鎖
+	if _, err := loadTasksFromFile(); err != nil {
+		fmt.Printf("Error: 初始載入/創建檔案失敗: %v\n", err)
+	}
 
 	// 啟動伺服器
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
