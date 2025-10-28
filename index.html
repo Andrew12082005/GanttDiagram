@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>我的專案甘特圖 - GitHub Pages</title>
+    <script type="module">
+      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+      mermaid.initialize({ startOnLoad: true });
+    </script>
+</head>
+<body>
+
+    <h1>專案進度甘特圖</h1>
+
+    <pre class="mermaid">
+        gantt
+            title 專案開發時程表 (Mermaid 範例)
+            dateFormat  YYYY-MM-DD
+
+            section 規劃階段
+            需求分析     :a1, 2025-11-01, 7d
+            設計原型     :after a1, 5d
+
+            section 開發階段
+            前端開發     :b1, after 設計原型, 10d
+            後端開發     :c1, after 設計原型, 15d
+            資料庫設計   :d1, 2025-11-05, 5d
+            整合測試     :2025-11-20, 5d
+
+            section 部署與發布
+            最終審核     :2025-11-25, 3d
+            正式上線     :2025-11-28, 2d
+    </pre>
+
+    <p>這是一個使用 Mermaid.js 在 GitHub Pages 上呈現的甘特圖。</p>
+
+</body>
+</html>
