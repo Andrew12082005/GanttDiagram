@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MQ-80 Pro Gantt Diagram</title>
+    <title>MQ-80 Pro Gantt Diagram (DB)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f7f7f7; }
@@ -117,7 +117,7 @@
 <body class="p-4 sm:p-8">
     <div class="max-w-7xl mx-auto">
         <header class="text-center mb-8">
-            <h1 class="text-4xl font-bold text-gray-800 mb-2">MQ-80 Pro Gantt Diagram</h1>
+            <h1 class="text-4xl font-bold text-gray-800 mb-2">MQ-80 Pro Gantt Diagram (DB)</h1>
         </header>
 
         <div id="addTaskForm" class="bg-white p-6 rounded-xl mb-6 card grid grid-cols-1 sm:grid-cols-2 md:grid-cols-7 gap-4 border border-gray-200">
@@ -128,11 +128,11 @@
             <input type="number" id="taskDuration" placeholder="持續天數" value="5" min="1" class="p-2 border rounded-md">
             
             <select id="taskPriority" class="p-2 border rounded-md">
-                <option value="1" style="background-color: #FF0000">P2</option>
-                <option value="2" style="background-color: #FF9797">P3</option>
-                <option value="3" style="background-color: #FFE66F">P4</option>
-                <option value="4" style="background-color: #10B981">P5</option>
-
+                <option value="1">P1</option>
+                <option value="2">P2</option>
+                <option value="3" selected>P3</option>
+                <option value="4">P4</option>
+                <option value="5">P5 (最低)</option>
             </select>
 
             <button onclick="addTask()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150 md:col-span-2">
@@ -141,14 +141,14 @@
         </div>
         <main class="card bg-white rounded-xl p-0 overflow-hidden relative">
             <div id="loadingOverlay" class="loading-overlay">
-                <p>正在從 Go 後端載入數據...</p>
+                <p>正在從 Go 後端 (SQLite) 載入數據...</p>
             </div>
             <div id="ganttChart" class="gantt-chart-container">
                 </div>
         </main>
         
         <footer class="mt-8 text-center text-gray-500 text-sm">
-            <p>本應用程式由 Go 後端提供數據服務，確保數據持久化於 <code class="bg-gray-200 p-1 rounded">gantt.json</code> 檔案。</p>
+            <p>本應用程式由 Go 後端提供數據服務，確保數據持久化於 <code class="bg-gray-200 p-1 rounded">gantt.db</code> 資料庫。</p>
             <p id="statusMessage" class="mt-2 text-sm font-semibold text-blue-600">載入中...</p>
         </footer>
     </div>
@@ -168,10 +168,11 @@
                     <div>
                         <label for="edit-priority" class="block text-sm font-medium text-gray-700">優先度</label>
                         <select id="edit-priority" required class="mt-1 p-2 block w-full border border-gray-300 rounded-md">
-                            <option value="1">P2</option>
-                            <option value="2">P3</option>
-                            <option value="3">P4</option>
-                            <option value="4">P5</option>
+                            <option value="1">P1 (緊急)</option>
+                            <option value="2">P2 (高)</option>
+                            <option value="3">P3 (中)</option>
+                            <option value="4">P4 (低)</option>
+                            <option value="5">P5 (最低)</option>
                         </select>
                     </div>
                     <div>
@@ -211,10 +212,11 @@
         
         // P1-P5 顏色對應表
         const PRIORITY_COLORS = {
-            1: '#FF0000', // Red
-            2: '#FF9797', // Orange
-            3: '#FFE66F', // Amber 
-            4: '#10B981'  // Green 
+            1: '#EF4444', // Red (緊急)
+            2: '#F97316', // Orange (高)
+            3: '#FBBF24', // Amber (中)
+            4: '#3B82F6', // Blue (低)
+            5: '#10B981'  // Green (最低)
         };
 
         // 根據優先級返回顏色
@@ -258,13 +260,14 @@
                 }
                 const fetchedTasks = await response.json();
                 
+                // *** 關鍵修復：從 t.ID 改為 t.id (全部小寫) ***
                 tasks = fetchedTasks.map(t => ({
-                    id: t.ID,
-                    name: t.Name,
-                    start: t.Start,
-                    durationDays: t.DurationDays,
-                    color: getPriorityColor(t.Priority),
-                    priority: t.Priority
+                    id: t.id,
+                    name: t.name,
+                    start: t.start,
+                    durationDays: t.durationDays,
+                    color: getPriorityColor(t.priority),
+                    priority: t.priority
                 }));
 
                 // (要求 1): 載入後立刻重排 ID
@@ -286,28 +289,21 @@
             // (要求 1): 在儲存前執行 ID 重排
             reIndexTasks();
 
-            // Map JS format back to Go format for serialization
-            const tasksToSend = tasks.map(t => ({
-                ID: t.id,
-                Name: t.name,
-                Start: t.start,
-                DurationDays: t.durationDays,
-                Color: t.color, 
-                Priority: t.priority
-            }));
+            // *** 關鍵修復：Go 後端需要小寫的 JSON，無需 .map() 轉換 ***
+            const tasksToSend = tasks; 
 
             try {
                 const response = await fetch(API_ENDPOINT, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(tasksToSend)
+                    body: JSON.stringify(tasksToSend) // 直接傳送 [ {id: 1, ...} ]
                 });
 
                 if (!response.ok) {
                     const errorData = await response.json();
                     throw new Error(errorData.error || 'Backend save failed');
                 }
-                statusMessage.textContent = 'Tasks successfully saved to gantt.json.';
+                statusMessage.textContent = 'Tasks successfully saved to gantt.db.';
                 renderGantt(); // 儲存並重排後，重新渲染
             } catch (error) {
                 console.error("Failed to save tasks:", error);
@@ -427,11 +423,10 @@
                     <div class="w-1/4 text-gray-400">#${task.id}</div> 
                     <div class="w-2/4 truncate">${task.name} (${getPriorityLabel(task.priority)})</div>
                     <div class="w-1/4 flex justify-center space-x-1">
-                       <button onclick="editTask(${task.id})" class="text-indigo-500 hover:text-indigo-700 p-1 rounded-full leading-none transition duration-150" title="編輯任務">
+                        <button onclick="editTask(${task.id})" class="text-indigo-500 hover:text-indigo-700 p-1 rounded-full leading-none transition duration-150" title="編輯任務">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" />
                             </svg>
-                        </button>
                         </button>
                         <button onclick="deleteTask(${task.id})" class="text-red-500 hover:text-red-700 p-1 rounded-full leading-none transition duration-150" title="刪除任務">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -454,8 +449,6 @@
             const timeAxis = document.createElement('div');
             timeAxis.className = 'time-axis';
             timeAxis.style.width = chartWidth + "px";
-            
-            // *** 關鍵修復：確保標頭填滿寬度 ***
             timeAxis.style.minWidth = "100%";
             
             const currentDay = new Date(minDate);
@@ -479,11 +472,8 @@
             
             // 應用 CSS Class
             taskBarsContainer.className = 'gantt-grid-lines';
-
             taskBarsContainer.style.width = chartWidth + "px";
             taskBarsContainer.style.position = 'relative'; 
-
-            // *** 關鍵修復：確保格線填滿寬度 ***
             taskBarsContainer.style.minWidth = "100%";
             
             // 賦予容器一個明確的高度
