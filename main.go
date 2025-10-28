@@ -11,7 +11,7 @@ import (
 	"time"
 
 	// *** 修改 1：移除 CGO 驅動 ***
-	// _ "github.com/mattn/go-sqlite3" 
+	// _ "github.com/mattn/go-sqlite3"
 
 	// *** 修改 2：匯入 Pure Go 驅動 ***
 	_ "modernc.org/sqlite"
@@ -35,9 +35,9 @@ var db *sql.DB
 // initDB 初始化資料庫連接並創建資料表 (如果不存在)
 func initDB(filepath string) (*sql.DB, error) {
 	var err error
-	
+
 	// *** 修改 3：將 "sqlite3" 改為 "sqlite" ***
-	db, err = sql.Open("sqlite", filepath) 
+	db, err = sql.Open("sqlite", filepath)
 	if err != nil {
 		return nil, fmt.Errorf("無法開啟資料庫: %w", err)
 	}
@@ -87,7 +87,7 @@ func initDB(filepath string) (*sql.DB, error) {
 func loadTasksFromDB() ([]Task, error) {
 	tasks := []Task{}
 	// 根據前端邏輯，按優先度排序
-	rows, err := db.Query("SELECT id, name, start, durationDays, color, priority FROM tasks ORDER BY priority")
+	rows, err := db.Query("SELECT id, name, start, durationDays, color, priority FROM tasks ORDER BY id")
 	if err != nil {
 		return nil, fmt.Errorf("查詢資料庫失敗: %w", err)
 	}
