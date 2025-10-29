@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context" // *** 修改 1：匯入 context (pgx 需要) ***
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -10,14 +11,14 @@ import (
 	"os"
 	"time"
 
-	// *** 修改 1：移除 CGO 驅動 ***
-	// _ "github.com/mattn/go-sqlite3"
+	// *** 修改 2：移除 sqlite 驅動 ***
+	// _ "modernc.org/sqlite"
 
-	// *** 修改 2：匯入 Pure Go 驅動 ***
-	_ "modernc.org/sqlite"
+	// *** 修改 3：匯入 pgx (PostgreSQL/CockroachDB) 驅動 ***
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// --- 1. 數據結構 (與前端/JSON 標籤匹配) ---
+// --- 1. 數據結構 (無需變動) ---
 type Task struct {
 	ID           int    `json:"id"`
 	Name         string `json:"name"`
@@ -32,30 +33,37 @@ type Task struct {
 // 全局資料庫連接
 var db *sql.DB
 
-// initDB 初始化資料庫連接並創建資料表 (如果不存在)
-func initDB(filepath string) (*sql.DB, error) {
+// *** 修改 4：initDB 不再需要檔案路徑，改為讀取環境變數 ***
+func initDB() (*sql.DB, error) {
 	var err error
 
-	// *** 修改 3：將 "sqlite3" 改為 "sqlite" ***
-	db, err = sql.Open("sqlite", filepath)
+	// 從 Render 環境變數中讀取 DATABASE_URL
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		log.Fatal("DATABASE_URL is not set in environment variables. Please set it.")
+	}
+
+	// *** 修改 5：將 "sqlite" 改為 "pgx" ***
+	db, err = sql.Open("pgx", dbURL)
 	if err != nil {
 		return nil, fmt.Errorf("無法開啟資料庫: %w", err)
 	}
 
-	if err = db.Ping(); err != nil {
-		return nil, fmt.Errorf("無法連接到資料庫: %w", err)
+	// 使用 context.Background() 進行 Ping
+	if err = db.PingContext(context.Background()); err != nil {
+		return nil, fmt.Errorf("無法連接到資料庫 (請檢查 DATABASE_URL 和網路): %w", err)
 	}
 
 	// 創建 tasks 資料表 (如果不存在)
-	// 欄位名稱使用小寫以匹配 JSON 標籤
+	// 這個 SQL 語法同時相容 SQLite 和 CockroachDB/PostgreSQL
 	createTableSQL := `
 	CREATE TABLE IF NOT EXISTS tasks (
-		"id" INTEGER PRIMARY KEY,
-		"name" TEXT,
-		"start" TEXT,
-		"durationDays" INTEGER,
-		"color" TEXT,
-		"priority" INTEGER
+		id INTEGER PRIMARY KEY,
+		name TEXT,
+		start TEXT,
+		durationDays INTEGER,
+		color TEXT,
+		priority INTEGER
 	);`
 
 	if _, err = db.Exec(createTableSQL); err != nil {
@@ -73,7 +81,6 @@ func initDB(filepath string) (*sql.DB, error) {
 	if count == 0 {
 		log.Println("資料庫為空，正在插入預設任務...")
 		defaultTasks := getInitialTasks()
-		// 我們將使用 saveTasksToDB 來插入，它會自動處理事務
 		if err := saveTasksToDB(defaultTasks); err != nil {
 			return nil, fmt.Errorf("插入預設任務失敗: %w", err)
 		}
@@ -86,7 +93,6 @@ func initDB(filepath string) (*sql.DB, error) {
 // loadTasksFromDB 從資料庫讀取所有任務 (此函數無需變動)
 func loadTasksFromDB() ([]Task, error) {
 	tasks := []Task{}
-	// 根據前端邏輯，按優先度排序
 	rows, err := db.Query("SELECT id, name, start, durationDays, color, priority FROM tasks ORDER BY id")
 	if err != nil {
 		return nil, fmt.Errorf("查詢資料庫失敗: %w", err)
@@ -103,29 +109,26 @@ func loadTasksFromDB() ([]Task, error) {
 	return tasks, nil
 }
 
-// saveTasksToDB 將前端傳來的完整任務列表寫入資料庫 (此函數無需變動)
+// saveTasksToDB 將前端傳來的完整任務列表寫入資料庫
 func saveTasksToDB(tasks []Task) error {
-	// 開始事務
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("開啟事務失敗: %w", err)
 	}
 
-	// 1. 刪除所有現有任務
 	if _, err := tx.Exec("DELETE FROM tasks"); err != nil {
 		tx.Rollback()
 		return fmt.Errorf("刪除舊任務失敗: %w", err)
 	}
 
-	// 2. 準備插入新任務
-	stmt, err := tx.Prepare("INSERT INTO tasks (id, name, start, durationDays, color, priority) VALUES (?, ?, ?, ?, ?, ?)")
+	// *** 修改 6：SQL 佔位符從 ? 改為 $1, $2, $3... ***
+	stmt, err := tx.Prepare("INSERT INTO tasks (id, name, start, durationDays, color, priority) VALUES ($1, $2, $3, $4, $5, $6)")
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("準備插入語句失敗: %w", err)
 	}
 	defer stmt.Close()
 
-	// 3. 循環插入所有任務
 	for _, task := range tasks {
 		if _, err := stmt.Exec(task.ID, task.Name, task.Start, task.DurationDays, task.Color, task.Priority); err != nil {
 			tx.Rollback()
@@ -133,26 +136,17 @@ func saveTasksToDB(tasks []Task) error {
 		}
 	}
 
-	// 4. 提交事務
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("提交事務失敗: %w", err)
-	}
-
-	return nil
+	return tx.Commit() // *** 修改 7：簡化提交事務的寫法 ***
 }
 
 // getInitialTasks 預設任務數據 (此函數無需變動)
 func getInitialTasks() []Task {
-	// 為了使用方便，將起始年設定為當前年份 + 1
+	// ... (此函數內容完全相同，故省略) ...
 	nextYear := time.Now().Year() + 1
 	start := time.Date(nextYear, time.January, 1, 0, 0, 0, 0, time.UTC)
-
-	// 格式化日期為 YYYY-MM-DD
 	formatDate := func(t time.Time) string {
 		return t.Format("2006-01-02")
 	}
-
-	// P1: #EF4444 (Red), P2: #F97316 (Orange), P3: #FBBF24 (Amber), P4: #3B82F6 (Blue), P5: #10B981 (Green)
 	return []Task{
 		{ID: 1, Name: "需求收集", Start: formatDate(start), DurationDays: 7, Color: "#3B82F6", Priority: 4},
 		{ID: 2, Name: "系統設計", Start: formatDate(start.AddDate(0, 0, 7)), DurationDays: 5, Color: "#F97316", Priority: 2},
@@ -162,10 +156,11 @@ func getInitialTasks() []Task {
 	}
 }
 
-// --- 3. HTTP 處理函數 ---
+// --- 3. HTTP 處理函數 (無需變動) ---
 
-// indexHandler 服務前端 HTML (此函數無需變動)
+// indexHandler 服務前端 HTML
 func indexHandler(w http.ResponseWriter, r *http.Request) {
+	// ... (此函數內容完全相同，故省略) ...
 	htmlBytes, err := os.ReadFile("index.html")
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error: Cannot find or read index.html. Detail: %v", err), http.StatusInternalServerError)
@@ -176,10 +171,10 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(htmlBytes)
 }
 
-// apiTasksHandler 處理 GET 和 POST (此函數無需變動)
+// apiTasksHandler 處理 GET 和 POST
 func apiTasksHandler(w http.ResponseWriter, r *http.Request) {
+	// ... (此函數內容完全相同，故省略) ...
 	w.Header().Set("Content-Type", "application/json")
-
 	switch r.Method {
 	case "GET":
 		tasks, err := loadTasksFromDB()
@@ -189,7 +184,6 @@ func apiTasksHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(tasks)
-
 	case "POST":
 		var tasks []Task
 		body, err := io.ReadAll(r.Body)
@@ -197,26 +191,19 @@ func apiTasksHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error": "讀取請求主體失敗"}`, http.StatusBadRequest)
 			return
 		}
-
-		// 解析前端傳來的小寫 JSON
 		if err := json.Unmarshal(body, &tasks); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error": "解析 JSON 失敗: %v"}`, err), http.StatusBadRequest)
 			return
 		}
-
-		// 將新任務列表存入資料庫
 		if err := saveTasksToDB(tasks); err != nil {
 			log.Printf("Error saving tasks to DB: %v\n", err)
 			http.Error(w, fmt.Sprintf(`{"error": "寫入任務數據失敗: %v"}`, err), http.StatusInternalServerError)
 			return
 		}
-
 		fmt.Println("Info: 任務數據已成功更新並寫入資料庫。")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"message": "任務數據儲存成功"}`))
-
 	default:
-		// 僅允許 GET 和 POST 方法
 		http.Error(w, `{"error": "不支援的方法"}`, http.StatusMethodNotAllowed)
 	}
 }
@@ -225,8 +212,8 @@ func apiTasksHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	var err error
-	// 初始化資料庫
-	db, err = initDB("./gantt.db")
+	// *** 修改 8：初始化資料庫，不需傳入路徑 ***
+	db, err = initDB()
 	if err != nil {
 		log.Fatalf("資料庫初始化失敗: %v", err)
 	}
@@ -236,8 +223,13 @@ func main() {
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/api/tasks", apiTasksHandler)
 
-	port := "8080"
-	fmt.Printf("Go 甘特圖後端已啟動 (使用 Pure Go SQLite)，請在瀏覽器中開啟 http://localhost:%s\n", port)
+	// *** 修改 9：讀取 Render 提供的 PORT 環境變數 ***
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // 本地開發時使用 8080
+	}
+
+	fmt.Printf("Go 甘特圖後端已啟動 (使用 CockroachDB/PostgreSQL)，正在監聽 %s 埠號...\n", port)
 
 	// 啟動伺服器
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
